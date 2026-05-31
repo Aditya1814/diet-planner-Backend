@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.database import get_supabase_client
@@ -21,13 +22,18 @@ router = APIRouter(prefix="/api/meal-plan", tags=["meal-plan"])
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
+class GenerateRequest(BaseModel):
+    """Optional request body for meal generation."""
+    user_prompt: Optional[str] = Field(None, max_length=500, description="Custom user preference like 'high protein' or 'light meals'")
+
+
 def _get_current_day_name(today: Optional[date] = None) -> str:
     if today is None:
         today = date.today()
     return DAYS_OF_WEEK[today.weekday()]
 
 
-async def _generate_single_day(user_id: str, target_date: Optional[date] = None):
+async def _generate_single_day(user_id: str, target_date: Optional[date] = None, user_prompt: Optional[str] = None):
     """
     Core logic: generate 4 meals for a SINGLE day using remaining grocery inventory.
     If meals already exist for that day, delete them first (regenerate).
@@ -88,29 +94,7 @@ async def _generate_single_day(user_id: str, target_date: Optional[date] = None)
     if not grocery_items_for_gemini:
         raise HTTPException(status_code=400, detail="No remaining groceries available to generate meals.")
 
-    # 2. Call Gemini for just 1 day (4 meals)
-    gemini_service = GeminiService()
-    try:
-        generated_meals = await gemini_service.generate_meal_plan(
-            grocery_items=grocery_items_for_gemini,
-            dietary_preferences=dietary_preferences,
-            days=[day_name],
-        )
-    except MealGenerationError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Meal generation failed: {str(e)}",
-        )
-
-    # 3. Fetch images for each meal
-    image_service = ImageService(
-        api_key=settings.google_search_api_key,
-        search_engine_id=settings.google_search_engine_id,
-    )
-    for meal in generated_meals:
-        meal["image_url"] = await image_service.get_meal_image(meal["meal_name"])
-
-    # 4. Ensure meal_plan record exists for this week
+    # 2. Ensure meal_plan record exists for this week (needed to check existing meals)
     existing_plan = (
         supabase.table("meal_plans")
         .select("id")
@@ -128,6 +112,42 @@ async def _generate_single_day(user_id: str, target_date: Optional[date] = None)
             .execute()
         )
         meal_plan_id = plan_result.data[0]["id"]
+
+    # 3. Collect existing meal names (to tell Gemini to avoid repeating them)
+    existing_meal_names = []
+    existing_day_meals_check = (
+        supabase.table("daily_meals")
+        .select("id, meal_name")
+        .eq("meal_plan_id", meal_plan_id)
+        .eq("meal_date", target_date.isoformat())
+        .execute()
+    )
+    if existing_day_meals_check.data:
+        existing_meal_names = [m["meal_name"] for m in existing_day_meals_check.data]
+
+    # 4. Call Gemini for just 1 day (4 meals), passing previous meals to avoid
+    gemini_service = GeminiService()
+    try:
+        generated_meals = await gemini_service.generate_meal_plan(
+            grocery_items=grocery_items_for_gemini,
+            dietary_preferences=dietary_preferences,
+            days=[day_name],
+            avoid_meals=existing_meal_names,
+            user_prompt=user_prompt,
+        )
+    except MealGenerationError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Meal generation failed: {str(e)}",
+        )
+
+    # 3. Fetch images for each meal
+    image_service = ImageService(
+        api_key=settings.google_search_api_key,
+        search_engine_id=settings.google_search_engine_id,
+    )
+    for meal in generated_meals:
+        meal["image_url"] = await image_service.get_meal_image(meal["meal_name"])
 
     # 5. Delete existing meals for this day (if regenerating) and refund ingredients
     existing_day_meals = (
@@ -260,13 +280,17 @@ async def _generate_single_day(user_id: str, target_date: Optional[date] = None)
 
 
 @router.post("/generate", status_code=201, response_model=List[DailyMealResponse])
-async def generate_today_plan(user_id: str = Depends(get_current_user_id)):
+async def generate_today_plan(
+    body: Optional[GenerateRequest] = None,
+    user_id: str = Depends(get_current_user_id),
+):
     """
     Generate meals for TODAY only (4 meals: breakfast, lunch, dinner, snacks).
     If today already has meals, regenerates them.
-    Uses remaining grocery inventory.
+    Accepts optional user_prompt for custom preferences (e.g., "high protein", "light meals").
     """
-    return await _generate_single_day(user_id)
+    user_prompt = body.user_prompt if body else None
+    return await _generate_single_day(user_id, user_prompt=user_prompt)
 
 
 @router.get("/today", response_model=List[DailyMealResponse])

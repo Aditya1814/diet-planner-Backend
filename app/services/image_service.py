@@ -3,11 +3,10 @@
 from __future__ import annotations
 import hashlib
 import httpx
-from urllib.parse import quote
 
 
 class ImageService:
-    """Retrieves meal image URLs. Uses multiple free sources."""
+    """Retrieves meal image URLs using free sources."""
 
     def __init__(self, api_key: str = "", search_engine_id: str = ""):
         self.api_key = api_key
@@ -15,13 +14,12 @@ class ImageService:
 
     async def get_meal_image(self, meal_name: str) -> str:
         """
-        Get an image URL for a meal. Tries multiple free sources:
-        1. Spoonacular-style URL (food-specific, free)
-        2. Fallback to a seeded placeholder
+        Get an image URL for a meal.
+        Uses foodish API with a short timeout, falls back to picsum.
         """
-        # Try fetching from foodish (random food images API - free, no key)
+        # Try foodish API (random food images - free, no key)
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=3.0) as client:
                 response = await client.get("https://foodish-api.com/api/")
                 if response.status_code == 200:
                     data = response.json()
@@ -31,6 +29,6 @@ class ImageService:
         except Exception:
             pass
 
-        # Fallback: use picsum with a seed based on meal name (consistent per meal)
+        # Fallback: picsum with seed based on meal name
         seed = int(hashlib.md5(meal_name.encode()).hexdigest()[:8], 16) % 1000
         return f"https://picsum.photos/seed/{seed}/400/300"

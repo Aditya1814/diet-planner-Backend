@@ -129,6 +129,7 @@ Rules:
 6. Each meal must have DETAILED step-by-step preparation instructions (at least 4-6 steps per meal). Write instructions for a complete beginner who has never cooked before. Include specific temperatures, cooking times, utensils needed, and visual cues (e.g., "cook until golden brown", "stir every 2 minutes").
 7. Snacks should be lighter/simpler than main meals.
 8. Distribute grocery usage across all meals to avoid running out early in the week.
+9. BE CREATIVE AND VARIED — do NOT repeat the same meals. Each time you generate, suggest DIFFERENT recipes, cooking styles, and flavor combinations. Think of diverse cuisines (Indian, Italian, Mexican, Asian, Mediterranean, etc.).
 
 Respond with ONLY valid JSON in the following format (no markdown, no extra text):
 {{
@@ -376,7 +377,8 @@ Generate meals for these days in order: {days_str}"""
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
-                "temperature": 0.7,
+                "temperature": 1.2,
+                "topP": 0.95,
                 "maxOutputTokens": 8192,
             },
         }
@@ -411,25 +413,29 @@ Generate meals for these days in order: {days_str}"""
         grocery_items: list[dict[str, Any]],
         dietary_preferences: list[str],
         days: list[str],
+        avoid_meals: list[str] | None = None,
+        user_prompt: str | None = None,
     ) -> list[dict[str, Any]]:
         """Generate meals for specified days using available groceries.
-
-        Implements retry logic with exponential backoff (up to 3 attempts).
-        Generates 4 meals per day (breakfast, lunch, dinner, snacks).
 
         Args:
             grocery_items: List of grocery items with name, quantity, and unit.
             dietary_preferences: List of dietary constraints.
             days: List of day names to generate meals for.
-
-        Returns:
-            List of validated meal dictionaries with day_of_week, meal_type,
-            meal_name, ingredients, and instructions.
-
-        Raises:
-            MealGenerationError: If generation fails after all retry attempts.
+            avoid_meals: List of meal names to avoid (previously generated).
+            user_prompt: Custom user preference (e.g., "high protein", "light meals").
         """
         prompt = self._build_prompt(grocery_items, dietary_preferences, days)
+        
+        # Append user's custom preference
+        if user_prompt and user_prompt.strip():
+            prompt += f"\n\nUSER'S SPECIAL REQUEST: {user_prompt.strip()}. Please prioritize this preference when selecting recipes."
+        
+        # Append avoidance instruction if previous meals exist
+        if avoid_meals and len(avoid_meals) > 0:
+            avoid_list = ", ".join(f'"{m}"' for m in avoid_meals)
+            prompt += f"\n\nIMPORTANT: Do NOT suggest these meals again (they were already generated): {avoid_list}. Generate completely DIFFERENT recipes."
+        
         expected_days = len(days)
 
         last_error: Optional[Exception] = None

@@ -86,8 +86,9 @@ async def submit_grocery_list(
         ).execute()
 
         # Update the updated_at timestamp
+        from datetime import datetime, timezone
         supabase.table("grocery_lists").update(
-            {"updated_at": "now()"}
+            {"updated_at": datetime.now(timezone.utc).isoformat()}
         ).eq("id", grocery_list_id).execute()
     else:
         # Create new grocery list
