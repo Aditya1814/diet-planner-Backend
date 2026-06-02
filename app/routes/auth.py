@@ -31,6 +31,8 @@ class RegisterRequest(BaseModel):
 
     email: str = Field(..., description="User email address")
     password: str = Field(..., description="User password")
+    first_name: str = Field("", description="User first name")
+    last_name: str = Field("", description="User last name")
 
 
 class LoginRequest(BaseModel):
@@ -116,8 +118,19 @@ async def register(request: RegisterRequest):
     supabase = get_supabase_client()
 
     try:
+        full_name = f"{request.first_name} {request.last_name}".strip()
         response = supabase.auth.sign_up(
-            {"email": request.email, "password": request.password}
+            {
+                "email": request.email,
+                "password": request.password,
+                "options": {
+                    "data": {
+                        "full_name": full_name,
+                        "first_name": request.first_name,
+                        "last_name": request.last_name,
+                    }
+                },
+            }
         )
 
         # Supabase returns a user even if email already exists (with identities=[])
